@@ -51,3 +51,5 @@ jobs:
             echo "{\"interface\":\"127.0.0.1\",\"port\":8099,\"dashboard_port\":8100,\"dashboard_token\":\"test-only\"}" | tempio -template /etc/nginx/templates/ingress.gtpl -out /etc/nginx/servers/ingress.conf
             nginx -t
           '
+      - name: Start the real S6 stack with a simulated Supervisor
+        run: bash scripts/smoke.sh

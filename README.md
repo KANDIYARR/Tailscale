@@ -24,6 +24,12 @@ Use an authentication key or open **Tailscale controls** for browser sign-in.
 Only `amd64` and `aarch64` are supported by this release, matching the current
 community app. The legacy `armv7` entry from 1.0.0 has been removed.
 
+## Dashboard preview
+
+The screenshots use fictional connection data.
+
+![Dashboard preview](docs/dashboard-preview.jpg)
+
 ## Included features
 
 | Networking foundation | Professional additions |
