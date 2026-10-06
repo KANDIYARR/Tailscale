@@ -1,0 +1,158 @@
+#!/usr/bin/with-contenv bashio
+# Author: Vinoth Sakthivel
+# S6 supervises this wrapper; it owns and reaps the daemon and active CLI.
+set -Eeuo pipefail
+umask 077
+
+readonly STATE_DIR=/config/tailscale
+readonly RUN_DIR=/run/tailscale
+readonly SOCKET=${RUN_DIR}/tailscaled.sock
+readonly KEY_FILE=${RUN_DIR}/auth-key
+daemon_pid=""
+command_pid=""
+
+cleanup() {
+    local pid
+    trap - EXIT TERM INT
+    for pid in "${command_pid}" "${daemon_pid}"; do
+        if [[ -n "${pid}" ]]; then
+            kill -TERM "${pid}" 2>/dev/null || true
+        fi
+    done
+    # Give tailscaled time to persist state and remove its network rules.
+    for ((i = 0; i < 10; i++)); do
+        if [[ -z "${daemon_pid}" ]] || ! kill -0 "${daemon_pid}" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    for pid in "${command_pid}" "${daemon_pid}"; do
+        if [[ -n "${pid}" ]]; then
+            kill -KILL "${pid}" 2>/dev/null || true
+            wait "${pid}" 2>/dev/null || true
+        fi
+    done
+    rm -f "${KEY_FILE}"
+}
+trap cleanup EXIT
+trap 'exit 0' TERM INT
+
+if [[ ! -c /dev/net/tun || ! -r /dev/net/tun || ! -w /dev/net/tun ]]; then
+    bashio::log.error "/dev/net/tun is missing or inaccessible; check host TUN support and the device mapping."
+    exit 1
+fi
+if ! (exec 3<> /dev/net/tun); then
+    bashio::log.error "Cannot open /dev/net/tun."
+    exit 1
+fi
+if [[ ! -d /config || ! -w /config ]]; then
+    bashio::log.error "The persistent /config mount is unavailable or not writable."
+    exit 1
+fi
+
+mkdir -p "${STATE_DIR}" "${RUN_DIR}"
+chmod 0700 "${STATE_DIR}" "${RUN_DIR}"
+rm -f "${KEY_FILE}" "${SOCKET}"
+
+# Validate before parsing; Bashio reads /data/options.json by default.
+if ! jq -e '
+    type == "object"
+    and ((.auth_key // "") | type == "string")
+    and ((.extra_args // []) | type == "array"
+         and all(.[]; type == "string" and (test("[\u0000-\u001f]") | not)))
+' /data/options.json >/dev/null; then
+    bashio::log.error "Invalid options: auth_key must be a string and extra_args a string array."
+    exit 1
+fi
+
+AUTH_KEY=""
+if bashio::config.has_value 'auth_key'; then
+    AUTH_KEY="$(bashio::config 'auth_key')"
+fi
+EXTRA_ARGS=(--accept-dns=false)
+count="$(jq -r '(.extra_args // []) | length' /data/options.json)"
+for ((i = 0; i < count; i++)); do
+    arg="$(bashio::config "extra_args[${i}]")"
+    # Each entry is exactly one argument: use --flag=value for values.
+    if [[ ! "${arg}" =~ ^--[a-z][a-z0-9-]*(=.*)?$ ]]; then
+        bashio::log.error "Each extra_args entry must be --flag or --flag=value."
+        exit 1
+    fi
+    case "${arg%%=*}" in
+        --auth-key|--authkey|--force-reauth|--reset|--timeout)
+            bashio::log.error "An extra_args entry conflicts with managed authentication or lifecycle settings."
+            exit 1
+            ;;
+    esac
+    EXTRA_ARGS+=("${arg}")
+done
+
+bashio::log.info "Starting Tailscale with persistent state in ${STATE_DIR}."
+tailscaled --statedir="${STATE_DIR}" \
+    --state="${STATE_DIR}/tailscaled.state" --socket="${SOCKET}" &
+daemon_pid=$!
+
+# Wait for a usable local API, not merely for a socket file to appear.
+backend=""
+for ((i = 0; i < 30; i++)); do
+    if ! kill -0 "${daemon_pid}" 2>/dev/null; then
+        bashio::log.error "tailscaled exited during startup."
+        exit 1
+    fi
+    status="$(timeout 2 tailscale --socket="${SOCKET}" status --json 2>/dev/null || true)"
+    backend="$(jq -r '.BackendState // empty' <<< "${status}" 2>/dev/null || true)"
+    case "${backend}" in
+        Running|Stopped|NeedsLogin|NeedsMachineAuth) break ;;
+    esac
+    backend=""
+    sleep 1
+done
+if [[ -z "${backend}" ]]; then
+    bashio::log.error "The Tailscale local API did not become ready."
+    exit 1
+fi
+
+UP_ARGS=(--reset --timeout=60s)
+if [[ "${backend}" == NeedsLogin && -n "${AUTH_KEY}" ]]; then
+    # File indirection keeps the key out of the process argument list.
+    printf '%s' "${AUTH_KEY}" > "${KEY_FILE}"
+    UP_ARGS+=("--auth-key=file:${KEY_FILE}")
+fi
+unset AUTH_KEY
+
+if [[ "${backend}" == NeedsLogin && ! -f "${KEY_FILE}" ]]; then
+    bashio::log.warning "Not authenticated. Set auth_key in the add-on options and restart."
+else
+    # --reset makes extra_args the complete desired configuration on each start.
+    # Existing identities authenticate from state without consuming another key.
+    while kill -0 "${daemon_pid}" 2>/dev/null; do
+        # Suppress CLI output because it may contain authentication information.
+        timeout 75 tailscale --socket="${SOCKET}" up \
+            "${UP_ARGS[@]}" "${EXTRA_ARGS[@]}" >/dev/null 2>&1 &
+        command_pid=$!
+        result=0
+        wait "${command_pid}" || result=$?
+        command_pid=""
+        if ((result == 0)); then
+            rm -f "${KEY_FILE}"
+            bashio::log.info "Tailscale configuration applied successfully."
+            break
+        fi
+        if ! kill -0 "${daemon_pid}" 2>/dev/null; then
+            break
+        fi
+        bashio::log.warning "tailscale up failed (status ${result}); check authentication, device approval, connectivity and extra_args. Retrying in 60 seconds."
+        # Interruptible delay; S6 shutdown does not wait for the retry interval.
+        sleep 60 &
+        command_pid=$!
+        wait "${command_pid}"
+        command_pid=""
+    done
+fi
+
+# Preserve the daemon's exit status so S6 can supervise subsequent restarts.
+result=0
+wait "${daemon_pid}" || result=$?
+daemon_pid=""
+bashio::log.warning "tailscaled exited (status ${result}); S6 will restart the service."
+exit "${result}"

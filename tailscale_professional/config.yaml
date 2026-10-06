@@ -1,0 +1,28 @@
+name: "Tailscale Professional"
+description: "Securely connect your Home Assistant instance to your Tailscale network."
+version: "1.0.0"
+slug: "tailscale_professional"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: services
+boot: auto
+# S6 must run as PID 1.
+init: false
+host_network: true
+privileged:
+  - NET_ADMIN
+# Requested legacy syntax; Supervisor normalizes this to /dev/net/tun.
+devices:
+  - "/dev/net/tun:/dev/net/tun"
+map:
+  - addon_config:rw
+# Stop the daemon before backing up its identity and state.
+backup: cold
+timeout: 30
+options: {}
+schema:
+  auth_key: "password?"
+  extra_args:
+    - "str?"
