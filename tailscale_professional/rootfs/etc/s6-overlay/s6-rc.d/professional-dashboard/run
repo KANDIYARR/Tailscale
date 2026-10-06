@@ -1,0 +1,2 @@
+#!/command/with-contenv bash
+exec python3 /opt/professional/server.py

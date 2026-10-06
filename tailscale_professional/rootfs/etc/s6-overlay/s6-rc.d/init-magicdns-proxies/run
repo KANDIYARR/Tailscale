@@ -1,0 +1,56 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Home Assistant Community App: Tailscale
+# Runs the dnsmasq proxies initialization
+# ==============================================================================
+
+readonly MAGIC_DNS_IPV4="100.100.100.100"
+readonly MAGIC_DNS_IPV6="fd7a:115c:a1e0::53"
+
+declare dns
+declare invalid_dns_config
+
+# MAGICDNS_MODE is in contenv at /var/run/s6/container_environment
+# - "RESTRICTED"   only domains in black-white-list are allowed on ingress side, everything else on egress side
+# - "UNRESTRICTED" everything except domains in black-white-list are allowed on ingress side, only domains in black-white-list on egress side
+readonly DNSMASQ_BLACK_WHITE_LIST_LOCATION="/run/dnsmasq_black_white_list"
+
+# Check DNS configuration
+invalid_dns_config="true"
+for dns in $(bashio::dns.servers); do
+  if bashio::var.equals "${dns}" "dns://${MAGIC_DNS_IPV4}" || \
+    bashio::var.equals "${dns}" "dns://${MAGIC_DNS_IPV6}"
+  then
+    invalid_dns_config="false"
+    break
+  fi
+done
+if bashio::var.true "${invalid_dns_config}"; then
+  bashio::log.notice \
+    "To use MagicDNS in Home Assistant, configure MagicDNS's IP address as DNS server with cli," \
+    "eg. 'ha dns options --servers dns://${MAGIC_DNS_IPV4}'"
+  bashio::log.notice \
+    "Please check your configuration based on the app's documentation under the \"DNS\" section"
+fi
+invalid_dns_config="false"
+for dns in $(bashio::dns.locals); do
+  if bashio::var.equals "${dns}" "dns://${MAGIC_DNS_IPV4}" || \
+    bashio::var.equals "${dns}" "dns://${MAGIC_DNS_IPV6}"
+  then
+    bashio::log.fatal \
+      "Do not configure MagicDNS's IP address (${dns:6}) as DNS server under Settings -> System -> Network"
+    invalid_dns_config="true"
+  fi
+done
+if bashio::var.true "${invalid_dns_config}"; then
+  bashio::exit.nok
+fi
+
+# This is necessary to prevent accessing MagicDNS before the ingress proxy starts up
+# The ingress proxy will remove these entries on startup
+magicdns-ingress-proxy-forwarding setup drop
+
+# During startup allow all egress queries, this will be reevaluated before ingress proxy starts
+printf 'RESTRICTED' > /var/run/s6/container_environment/MAGICDNS_MODE
+printf '' > "${DNSMASQ_BLACK_WHITE_LIST_LOCATION}"

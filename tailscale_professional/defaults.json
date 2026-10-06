@@ -1,0 +1,29 @@
+{
+  "accept_dns": false,
+  "accept_routes": false,
+  "advertise_connector": false,
+  "advertise_exit_node": false,
+  "advertise_routes": [],
+  "advertise_tags": [],
+  "always_use_derp": false,
+  "log_suppression": true,
+  "log_upload": false,
+  "login_server": "https://controlplane.tailscale.com",
+  "share_homeassistant": "disabled",
+  "share_on_port": 443,
+  "services": [],
+  "snat_subnet_routes": true,
+  "stateful_filtering": false,
+  "taildrive": {
+    "local_apps": false,
+    "app_configs": false,
+    "backup": false,
+    "config": false,
+    "media": false,
+    "share": false,
+    "ssl": false
+  },
+  "taildrop": false,
+  "userspace_networking": false,
+  "extra_args": []
+}

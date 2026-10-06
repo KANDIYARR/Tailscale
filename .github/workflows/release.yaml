@@ -1,0 +1,39 @@
+name: Publish versioned images
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install PyYAML==6.0.3
+      - name: Check release version and tests
+        run: |
+          python scripts/validate.py
+          python -m unittest discover -s tests -v
+          python -c 'import os,yaml; assert "v"+yaml.safe_load(open("tailscale_professional/config.yaml"))["version"] == os.environ["GITHUB_REF_NAME"]'
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish both architecture images
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          image="ghcr.io/${GH_REPOSITORY,,}"
+          version="${GITHUB_REF_NAME#v}"
+          for arch in amd64 aarch64; do
+            platform=linux/amd64
+            if [ "$arch" = aarch64 ]; then platform=linux/arm64; fi
+            docker buildx build --platform "$platform" --build-arg BUILD_ARCH="$arch" --build-arg BUILD_VERSION="$version" --tag "$image/$arch:$version" --push tailscale_professional
+          done

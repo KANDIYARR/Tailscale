@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""Startup helper. Outputs argument records without shell interpretation."""
+import json
+import sys
+sys.path.insert(0, '/opt/professional')
+from options import OPTIONS_PATH, OptionsError, migrate, validate
+try:
+    if sys.argv[1:] == ['migrate']:
+        migrate()
+    else:
+        values = validate(json.loads(OPTIONS_PATH.read_text()))
+        if sys.argv[1:] == ['extra-args']:
+            for argument in values.get('extra_args', []):
+                sys.stdout.buffer.write(argument.encode() + b'\0')
+        elif sys.argv[1:] != ['validate']:
+            raise OptionsError('Unsupported configuration helper command.')
+except (OptionsError, OSError, ValueError) as error:
+    print(str(error) if isinstance(error, OptionsError) else 'Unable to read Professional options.', file=sys.stderr)
+    sys.exit(1)

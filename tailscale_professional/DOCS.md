@@ -1,85 +1,113 @@
 # Tailscale Professional
 
-Maintainer: Vinoth Sakthivel · Version: 1.0.0
+Maintained by Vinoth Sakthivel. Version 2.0.0.
 
-## Installation
+## Dashboard and setup
 
-For a local installation, copy the `tailscale_professional` directory into
-Home Assistant's `/addons` directory. Refresh the add-on/app store, install
-Tailscale Professional, configure it, then start it. Repository installations
-use `repository.yaml` at the repository root and the same add-on subdirectory.
-Add the real repository URL to `repository.yaml` before publishing it.
+Open the Web UI from Home Assistant. The dashboard shows connection state,
+device addresses, visible peers, key expiry and Tailscale health messages.
 
-Example options:
+1. Select **Set up connection**. Choose a device name and optionally supply an
+   authentication key. Leaving the key empty preserves an existing saved key.
+   Use **Remove the saved key** to explicitly clear it after enrollment.
+2. Choose DNS, accepted routes, userspace networking and advertised routes.
+3. Review the settings, then select **Save and restart**. This persists options
+   through Supervisor and restarts only this add-on. A remote Tailscale session
+   may disconnect briefly.
 
-```yaml
-auth_key: "tskey-auth-REPLACE_WITH_YOUR_KEY"
-extra_args:
-  - "--hostname=home-assistant"
-  - "--accept-routes=false"
-```
+If no key is supplied and the device is not enrolled, open **Tailscale controls**
+for browser sign-in. Device or route approval may still be required in your
+Tailscale administration console. Enrollment keys are used only when login is
+required. They are never returned to the dashboard or included in the process
+argument list. Password fields mask display; stored options and backups still
+contain secrets, so protect your backups.
 
-Both options may be omitted. A new installation without a key starts the
-daemon and logs instructions to configure a key; it does not join a tailnet.
-An existing installation resumes its saved identity without requiring a key.
-After successful enrollment, remove `auth_key` from the options. The password
-field masks its UI display; it does not encrypt options or backup contents.
+## Configuration
 
-## Arguments and authentication
+All community-app configuration options are retained:
 
-Each `extra_args` item is one literal argument, using `--flag` or
-`--flag=value`. Shell expansion is never performed. Authentication, reset,
-reauthentication and timeout flags are managed by the service.
+- `accept_dns`, `accept_routes`: DNS and advertised route acceptance. DNS defaults
+  to false in Professional, preserving the 1.0.0 behavior.
+- `advertise_routes`, `advertise_exit_node`, `exit_node`: subnet and exit routing.
+  Providing and consuming an exit node simultaneously is rejected. LAN access is
+  preserved when an exit node is selected.
+- `advertise_connector`, `advertise_tags`: connector and tag preferences.
+- `login_server`: Tailscale or a compatible Headscale control server. Sign out
+  using Tailscale controls before changing servers; Professional does not force
+  reauthentication silently.
+- `snat_subnet_routes`, `stateful_filtering`: advanced routing behavior.
+- `always_use_derp`: use relay traffic when direct UDP connectivity is problematic.
+- `log_upload`, `log_suppression`: Tailscale logging preferences.
+- `share_homeassistant`, `share_on_port`: disabled, Serve or Funnel sharing.
+- `services`: named Tailscale Services with name, target, protocol, port and path.
+- `taildrop`: receive files in `/share/taildrop`.
+- `taildrive`: selectively share `local_apps`, `app_configs`, `backup`, `config`,
+  `media`, `share` and `ssl`. All are disabled by default.
+- `userspace_networking`: userspace mode instead of the host TUN interface.
 
-The service calls `tailscale up --reset --accept-dns=false`, followed by
-your arguments. Thus `extra_args` is the complete desired configuration:
-removing an option restores that Tailscale preference's default on restart.
-Settings changed manually through the CLI are overwritten on restart.
-An explicit `--accept-dns=true` overrides the default if desired.
+Professional additionally provides:
 
-Keys are supplied through a mode-0600 file under `/run/tailscale`, removed
-after successful configuration or shutdown. Existing authenticated nodes
-do not reuse the configured key. Configuration failures retry after 60 seconds;
-check the options and Tailscale administration console if this persists.
-Newly authenticated devices may also require administrator approval.
+- `auth_key`: optional authentication key, including compatible Headscale keys.
+- `hostname`: optional device name, up to 63 letters, numbers or hyphens.
+- `extra_args`: optional array of literal `--flag` or `--flag=value` arguments.
+  Use dedicated options for managed settings. Authentication, timeout, reset and
+  reauthentication flags cannot be overridden here. Invalid Tailscale flags can
+  prevent connection; the dashboard remains available to help with setup.
 
-## Routing
+The complete settings are applied at startup using `tailscale up --reset`.
+Manual CLI preference changes are overwritten on restart. For detailed
+networking prerequisites and configuration examples, see the attributed
+[upstream reference](UPSTREAM_DOCS.md). Use Professional's own installation URL,
+state paths and defaults when that reference differs.
 
-Examples include `--advertise-routes=192.168.1.0/24`,
-`--advertise-exit-node`, and `--exit-node=100.64.0.10`.
-Advertising routes or an exit node requires appropriate host IP forwarding
-and Tailscale administrator approval. This add-on does not automatically
-change host forwarding sysctls. Selecting an exit node changes outbound
-routing in the shared host network namespace; use
-`--exit-node-allow-lan-access=true` when local LAN access is required.
+## Networking prerequisites
 
-## Persistence and shutdown
+Subnet routing and exit nodes require host IP forwarding and administrative
+approval. Serve/Funnel require appropriate tailnet permissions and HTTPS
+capabilities; Home Assistant must permit the local reverse proxy. The add-on
+checks the Home Assistant proxy configuration before serving it. Funnel makes
+Home Assistant reachable from the public internet when explicitly enabled.
 
-Identity, preferences and other daemon state reside in `/config/tailscale`,
-inside the mapped add-on configuration directory. Include this add-on and
-its configuration in backups. Cold backups stop the service for a consistent
-copy, briefly disconnecting Tailscale. Do not operate an original installation
-and a restored copy simultaneously with the same Tailscale identity.
+Userspace mode limits host-initiated connections to other tailnet devices.
+MagicDNS includes the upstream DNS proxy and route-protection services; follow
+the upstream DNS instructions rather than setting 100.100.100.100 directly as a
+host network DNS server. Do not run another Tailscale daemon on the same host
+network namespace at the same time.
 
-S6 supervises the wrapper. Shutdown signals stop the active CLI and daemon;
-the daemon gets up to 10 seconds to exit before forced termination. A daemon
-exit causes S6 to restart the service. Avoid running another tailscaled
-instance in the same host network namespace.
+## Persistence, permissions and backups
 
-## Compatibility and release validation
+Professional owns `/config`, mapped from its app configuration directory.
+Identity stays in `/config/tailscale`; upgrading from 1.0.0 retains that path.
+Home Assistant's configuration is mounted at `/homeassistant` and is exported
+as the `config` share only if explicitly enabled in Taildrive. Other directory
+mounts follow the community app layout.
 
-The requested `armv7` architecture is retained for legacy installations;
-current Home Assistant tooling no longer supports it. Alpine 3.22 base
-images provide the corresponding architecture-specific build targets.
+`NET_ADMIN` supports TUN and routing, `NET_RAW` supports network operations,
+and `SYS_ADMIN` permits the isolated resolver mount used by the DNS integration.
+Host D-Bus and Supervisor access support network configuration and integration.
+The included AppArmor profile remains enabled. Taildrive's broad directory
+mounts include sensitive data: enable individual shares deliberately.
 
-The exact requested `devices: ["/dev/net/tun:/dev/net/tun"]` and
-`addon_config:rw` syntax is accepted for compatibility but is deprecated by
-current Supervisor. For a current-only configuration, use
-`devices: ["/dev/net/tun"]` and replace the map entry with
-`{type: app_config, read_only: false, path: /config}`.
+Cold backups stop the add-on to capture consistent state. Include the add-on
+configuration in backups, and never run restored and original copies with the
+same identity simultaneously.
 
-Before a production release, build and run on each supported target, verify
-the host's AppArmor/TUN behavior, first enrollment, key removal, restart,
-network recovery, routing if enabled, graceful shutdown and backup restoration.
-The source includes no privileged host test results. Maintain security updates
-for the Home Assistant base image and Alpine's Tailscale package.
+## Diagnostics and troubleshooting
+
+**Connection report** downloads an allowlisted status summary without keys,
+authentication links, full preferences, account profiles or logs. It still
+contains device names and network addresses; review it before sharing.
+
+- **Sign-in needed:** open Tailscale controls or supply a valid key.
+- **Approval needed:** approve the device in your tailnet administration console.
+- **Setup changed elsewhere:** refresh before saving; another editor changed options.
+- **Restart did not reconnect:** reopen the dashboard or restart from Home Assistant.
+- **Configuration error:** inspect Home Assistant's add-on logs and advanced options.
+
+The dashboard binds only to loopback, uses a private nginx-to-dashboard token,
+and rejects setup changes without a per-session request token. Nginx restricts
+Ingress traffic to the Home Assistant Supervisor gateway. No dashboard port is
+published publicly.
+
+This release supports amd64 and aarch64. Runtime qualification on a real Home
+Assistant host is tracked separately from automated unit and container checks.

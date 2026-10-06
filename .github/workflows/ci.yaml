@@ -1,0 +1,53 @@
+name: Validate and build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install PyYAML==6.0.3
+      - run: python scripts/validate.py
+      - run: python -m unittest discover -s tests -v
+      - run: node --check tailscale_professional/rootfs/opt/professional/static/app.js
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native image
+        run: docker build --build-arg BUILD_ARCH=${{ matrix.arch }} -t tailscale-professional:test tailscale_professional
+      - name: Validate image tools and dashboard
+        run: |
+          docker run --rm --entrypoint /bin/bash tailscale-professional:test -ec '
+            /opt/tailscale version
+            python3 -c "import sys; sys.path.insert(0, \"/opt/professional\"); import server, options"
+            test -x /etc/s6-overlay/s6-rc.d/professional-dashboard/run
+            test -x /usr/bin/professional-options
+            test -x /usr/bin/subnet-routes
+          '
+      - name: Check nginx configuration
+        run: |
+          docker run --rm --entrypoint /bin/bash tailscale-professional:test -ec '
+            mkdir -p /etc/nginx/servers
+            echo "{\"interface\":\"127.0.0.1\",\"port\":8099,\"dashboard_port\":8100,\"dashboard_token\":\"test-only\"}" | tempio -template /etc/nginx/templates/ingress.gtpl -out /etc/nginx/servers/ingress.conf
+            nginx -t
+          '
